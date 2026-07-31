@@ -8,7 +8,7 @@ import requests
 # 智能环境配置：仅在未设置时才应用默认值
 if "DISPLAY" not in os.environ:
     os.environ["DISPLAY"] = ":1"
-    
+
 if "XAUTHORITY" not in os.environ:
     if os.path.exists("/home/headless/.Xauthority"):
         os.environ["XAUTHORITY"] = "/home/headless/.Xauthority"
@@ -21,7 +21,7 @@ from selenium.webdriver.common.action_chains import ActionChains
 
 # ================= 配置区域 =================
 PROXY_URL = os.getenv("PROXY", "socks5://127.0.0.1:1080")  # 代理
-COOKIE = os.getenv("COOKIE")  # 需要注入的Cookies
+RAW_COOKIE = os.getenv("COOKIE")  # 支持两种格式：① 只传 remember_web 的 value ② 传浏览器复制的完整 "a=1; b=2; ..." 字符串
 TG_TOKEN = os.getenv("TG_TOKEN")  # tg通知token
 TG_CHAT_ID = os.getenv("TG_CHAT_ID")  # tg通知chat_id
 
@@ -29,7 +29,39 @@ TG_CHAT_ID = os.getenv("TG_CHAT_ID")  # tg通知chat_id
 LOGIN_URL = "https://dash.aclclouds.com/auth/login"
 CHECK_URL = "https://dash.aclclouds.com/api/client"
 PROJECT_URL = "https://dash.aclclouds.com/projects"
+
+# remember_web 的 cookie 名称是固定的（Laravel: sha1('web')），不会变
+REMEMBER_COOKIE_NAME = "remember_web_59ba36addc2b2f9401580f014c7f58ea4e30989d"
 # ===========================================
+
+
+def extract_remember_cookie(raw: str) -> str:
+    """
+    自动识别 COOKIE 环境变量的格式：
+    - 如果传入的是浏览器复制的完整 cookie 字符串（包含 "; " 分隔的多个键值对），
+      自动从中提取 remember_web_xxx 的值。
+    - 如果传入的已经是单独的 remember_web 值（不含 "=" 或不含目标 cookie 名），
+      直接原样返回。
+    """
+    if not raw:
+        return raw
+
+    if REMEMBER_COOKIE_NAME in raw:
+        # 说明传入的是完整 cookie 字符串，逐段解析
+        for part in raw.split(";"):
+            part = part.strip()
+            if not part or "=" not in part:
+                continue
+            name, value = part.split("=", 1)
+            if name.strip() == REMEMBER_COOKIE_NAME:
+                return value.strip()
+
+    # 未匹配到完整字符串里的目标字段，当作用户已经只传了 value
+    return raw.strip()
+
+
+COOKIE = extract_remember_cookie(RAW_COOKIE)
+
 
 class AclcloudsRenewal:
     def __init__(self):
@@ -51,7 +83,7 @@ class AclcloudsRenewal:
         if not TG_TOKEN or not TG_CHAT_ID:
             self.log("⚠️ 未配置 TG_TOKEN 或 TG_CHAT_ID，跳过推送。")
             return
-        
+
         try:
             if photo_path and os.path.exists(photo_path):
                 url = f"https://api.telegram.org/bot{TG_TOKEN}/sendPhoto"
@@ -59,16 +91,19 @@ class AclcloudsRenewal:
             else:
                 url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
                 requests.post(url, data={'chat_id': TG_CHAT_ID, 'text': message})
-            
+
             self.log("✅ TG 推送已发送")
         except Exception as e:
             self.log(f"❌ TG 推送失败: {e}")
 
     def inject_cookie_via_cdp(self, sb):
         """用 CDP 注入 cookie，绕过 Selenium add_cookie 的 invalid cookie domain bug"""
+        if not COOKIE:
+            self.log("❌ COOKIE 环境变量为空，无法注入")
+            return False
         try:
             sb.driver.execute_cdp_cmd("Network.setCookie", {
-                "name": "remember_web_59ba36addc2b2f9401580f014c7f58ea4e30989d",
+                "name": REMEMBER_COOKIE_NAME,
                 "value": COOKIE,
                 "domain": "dash.aclclouds.com",
                 "path": "/",
@@ -96,7 +131,7 @@ class AclcloudsRenewal:
 
     def try_keep_click(self, sb):
         xpath = "//*[contains(text(),'I am not a robot')]"
-        if sb.is_element_present("xpath", xpath): 
+        if sb.is_element_present("xpath", xpath):
             el = sb.find_element("xpath", xpath)
             rect = el.rect
             x = rect["width"]/2
@@ -125,11 +160,16 @@ class AclcloudsRenewal:
         self.log("=" * 40)
         self.log("🚀 Aclclouds - 多卡片并行 Renew 流程")
         self.log("=" * 40)
+
+        if not COOKIE:
+            self.log("❌ 未检测到有效 COOKIE，请设置环境变量 COOKIE（完整字符串或单独 remember_web 值均可）")
+            return
+
         self.log("🎯 正在启动 Chrome 浏览器...")
-        
+
         with SB(
             uc=True,            # 启用反检测模式
-            test=True, 
+            test=True,
             headed=True,        # 强制有头模式
             headless=False,     # 明确禁用 headless
             xvfb=False,         # 禁用内部虚拟显示器
@@ -138,7 +178,7 @@ class AclcloudsRenewal:
         ) as sb:
             try:
                 self.log("✅ 浏览器已启动！")
-                
+
                 # 1. IP 检测
                 self.log("🌍 正在检测出口 IP...")
                 try:
@@ -174,7 +214,7 @@ class AclcloudsRenewal:
                 for idx in range(cards_count):
                     # 构建当前卡片的绝对 CSS 路径定位器
                     card_css = f".projects-cards-grid > div:nth-child({idx + 1})"
-                    
+
                     if not sb.is_element_present(card_css):
                         continue
 
@@ -190,7 +230,7 @@ class AclcloudsRenewal:
                     # 定义可能存在的按钮选择器
                     renew_btn = f"{card_css} button:contains('Renew')"
                     reactivate_btn = f"{card_css} button:contains('Reactivate')"
-                    
+
                     has_renew = sb.is_element_visible(renew_btn)
                     has_reactivate = sb.is_element_visible(reactivate_btn)
 
@@ -210,7 +250,7 @@ class AclcloudsRenewal:
                     # 确定操作目标与动作描述
                     target_btn = renew_btn if has_renew else reactivate_btn
                     action_title = "自动续期 (Renew)" if has_renew else "重新激活 (Reactivate)"
-                    
+
                     self.log(f"⚡ 发现可用动作 [{action_title}]，当前状态: {time_before}。开始触发...")
                     sb.scroll_to(target_btn)
                     time.sleep(2)
@@ -250,13 +290,13 @@ class AclcloudsRenewal:
                     # 留存当前服务器的处理快照并推送通知
                     screenshot_path = f"{self.screenshot_dir}/{server_name}_result.png"
                     sb.save_screenshot(screenshot_path)
-                    
+
                     self.send_telegram_notify(
                         f"🎉 Aclclouds 自动运维任务完成\n"
                         f"🖥️ 服务器名称：{server_name}\n"
                         f"🔧 执行动作：{action_title}\n"
                         f"🕒 变更前状态：{time_before}\n"
-                        f"🚀 变更后状态：{time_after}", 
+                        f"🚀 变更后状态：{time_after}",
                         screenshot_path
                     )
 
@@ -268,6 +308,7 @@ class AclcloudsRenewal:
                 import traceback
                 traceback.print_exc()
                 sb.save_screenshot(f"{self.screenshot_dir}/error.png")
+
 
 if __name__ == "__main__":
     AclcloudsRenewal().run()
