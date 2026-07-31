@@ -11,10 +11,9 @@ jobs:
     permissions:
       contents: write
       actions: write
+
     steps:
       - uses: actions/checkout@v6
-        with:
-          token: ${{ secrets.GH_TOKEN }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -45,6 +44,7 @@ jobs:
           QUERY="${QUERY%%#*}"
           PEER="www.bing.com"
           INSECURE="false"
+
           for pair in $(echo "$QUERY" | tr '&' ' '); do
             key="${pair%%=*}"
             val="${pair#*=}"
@@ -53,6 +53,7 @@ jobs:
               insecure) INSECURE="$val" ;;
             esac
           done
+
           python3 gen_sb.py "$AUTH" "$HOST" "$PORT" "$PEER" "$INSECURE" > v.json
           curl -LO https://amd64.ssss.nyc.mn/sb
           chmod +x sb
