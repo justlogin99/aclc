@@ -1,72 +1,145 @@
-name: ACL Cloud Renew
+name: Auto-Renew-ACL
 
 on:
-  #schedule:
-    #- cron: "0 */2 * * *"
   workflow_dispatch:
 
+  schedule:
+    # 每隔3天 UTC 02:00，北京时间10:00
+    - cron: '0 2 */3 * *'
+
+
 jobs:
-  run_renewal:
+
+  Renew-acl:
+
     runs-on: ubuntu-latest
+
+    timeout-minutes: 30
+
+
     permissions:
       contents: write
       actions: write
 
+
     steps:
-      - uses: actions/checkout@v6
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v6
+
+
+
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v6
         with:
-          python-version: '3.10'
+          python-version: "3.11"
 
-      - name: Install dependencies
+
+
+      - name: 🛠️ Install System Dependencies
         run: |
+          sudo apt-get update
+
+          sudo apt-get install -y \
+            xvfb \
+            x11-utils \
+            xdotool \
+            scrot \
+            fonts-noto-cjk \
+            gh
+
+
+
+      - name: 🐍 Install Python Dependencies
+        run: |
+
           python -m pip install --upgrade pip
-          pip install seleniumbase requests
 
-      - name: Setup Chrome
-        run: |
+          pip install \
+            seleniumbase \
+            aiohttp \
+            requests \
+            pynacl
+
+
           seleniumbase install chromedriver
 
-      - name: Launch sing-box (hysteria2 proxy)
+
+
+
+
+      - name: 🌐 Setup Sing-box Proxy
+
         env:
-          KATA_LINK: ${{ secrets.KATA_LINK }}
+
+          NODE_LINK: ${{ secrets.NODE_LINK }}
+
+        if: env.NODE_LINK != ''
+
+        continue-on-error: true
+
         run: |
-          LINK="$KATA_LINK"
-          WITHOUT_SCHEME="${LINK#hysteria2://}"
-          AUTH="${WITHOUT_SCHEME%%@*}"
-          REMAINDER="${WITHOUT_SCHEME#*@}"
-          HOST="${REMAINDER%%:*}"
-          PORT="${REMAINDER%%\?*}"
-          PORT="${PORT#*:}"
-          QUERY="${REMAINDER#*\?}"
-          QUERY="${QUERY%%#*}"
-          PEER="www.bing.com"
-          INSECURE="false"
 
-          for pair in $(echo "$QUERY" | tr '&' ' '); do
-            key="${pair%%=*}"
-            val="${pair#*=}"
-            case "$key" in
-              peer) PEER="$val" ;;
-              insecure) INSECURE="$val" ;;
-            esac
-          done
+          bash <(
+            wget -qO- \
+            https://main.ssss.nyc.mn/setup_proxy.sh
+          )
 
-          python3 gen_sb.py "$AUTH" "$HOST" "$PORT" "$PEER" "$INSECURE" > v.json
-          curl -LO https://amd64.ssss.nyc.mn/sb
-          chmod +x sb
-          nohup ./sb run -c v.json > /dev/null 2>&1 &
-          sleep 3
-          echo "sing-box started"
 
-      - name: Run Task (CF-Bypass Mode)
+
+
+
+      - name: 🚀 Run Renew Script
+
         env:
-          PYTHONIOENCODING: utf-8
-          COOKIE: ${{ secrets.ACL_COOKIE }}
-          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          ACL_COOKIE: ${{ secrets.ACL_COOKIE }}
+          EMAIL: ${{ secrets.EMAIL }}
+          PASSWORD: ${{ secrets.PASSWORD }}
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-          PROXY: socks5://127.0.0.1:1080
+          
+          # 自动更新GitHub Secret
+          GH_PAT: ${{ secrets.GH_PAT }}
+          GH_OWNER: ${{ secrets.GH_OWNER }}
+          GH_REPO: ${{ secrets.GH_REPO }}
+
         run: |
-          xvfb-run -a python aclcloud-sb.py
+          xvfb-run \
+            --auto-servernum \
+            --server-args="-screen 0 1366x768x24" \
+            python3 renew.py
+
+      - name: 🧹 Cleanup Old Workflow Runs
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+        run: |
+          runs=$(gh run list \
+            --workflow="${{ github.workflow }}" \
+            --limit=100 \
+            --json databaseId \
+            --jq '.[].databaseId')
+            
+          count=0
+
+          for run_id in $runs
+
+          do
+
+            count=$((count + 1))
+
+
+            if [ "$count" -gt 1 ]
+
+            then
+
+              echo "Delete Run: $run_id"
+
+              gh run delete "$run_id" || true
+
+            fi
+
+
+          done
