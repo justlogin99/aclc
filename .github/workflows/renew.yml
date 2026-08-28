@@ -3,9 +3,9 @@ name: Auto-Renew-ACL
 on:
   workflow_dispatch:
 
-  schedule:
+  #schedule:
     # 每隔3天 UTC 02:00，北京时间10:00
-    - cron: '0 2 */3 * *'
+    #- cron: '0 2 */3 * *'
 
 
 jobs:
